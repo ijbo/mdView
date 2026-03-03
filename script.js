@@ -2690,10 +2690,22 @@ This is a fully client-side application. Your content never leaves your browser 
   });
 
   // ========================================
-  // ENCRYPTED SHARING VIA URL
+  // ENCRYPTED SHARING VIA FIREBASE + URL FALLBACK
   // ========================================
 
   const SHARE_BASE_URL = 'https://markdownview.github.io/';
+
+  // --- Firebase Config (public-safe keys) ---
+  const firebaseConfig = {
+    apiKey: 'AIzaSyC_5pgtZ-mZvHmIUH9X7MkObPwDLw8nyfw',
+    authDomain: 'mdview-share.firebaseapp.com',
+    projectId: 'mdview-share',
+    storageBucket: 'mdview-share.firebasestorage.app',
+    messagingSenderId: '866669616957',
+    appId: '1:866669616957:web:47dd3ed6048fa8ba1faf54'
+  };
+  const firebaseApp = firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
 
   // --- Compression Helpers ---
 
@@ -2779,7 +2791,7 @@ This is a fully client-side application. Your content never leaves your browser 
     );
   }
 
-  // --- Share Flow (URL-based, no server needed) ---
+  // --- Share Flow (Firebase + URL fallback) ---
 
   async function shareMarkdown() {
     const shareButton = document.getElementById('share-button');
@@ -2809,12 +2821,23 @@ This is a fully client-side application. Your content never leaves your browser 
       const dataString = uint8ArrayToBase64Url(encrypted);
       const keyString = await keyToBase64Url(key);
 
-      // Step 5: Build URL with content in fragment (never sent to server)
-      const shareUrl = `${SHARE_BASE_URL}#d=${dataString}&k=${keyString}`;
+      let shareUrl;
 
-      // Check URL length
-      if (shareUrl.length > 65000) {
-        throw new Error('Content too large to share via URL. Try sharing a smaller document.');
+      // Step 5: Try to store in Firebase for short URL
+      try {
+        const docRef = await db.collection('shares').add({
+          d: dataString,
+          t: Date.now()
+        });
+        // Short URL with Firebase doc ID
+        shareUrl = `${SHARE_BASE_URL}#id=${docRef.id}&k=${keyString}`;
+      } catch (fbError) {
+        console.warn('Firebase unavailable, using URL fallback:', fbError);
+        // Fallback: put data directly in URL
+        shareUrl = `${SHARE_BASE_URL}#d=${dataString}&k=${keyString}`;
+        if (shareUrl.length > 65000) {
+          throw new Error('Content too large to share. Try a smaller document.');
+        }
       }
 
       // Step 6: Show share result
@@ -2832,23 +2855,36 @@ This is a fully client-side application. Your content never leaves your browser 
     }
   }
 
-  // --- Load Shared Flow (from URL fragment) ---
+  // --- Load Shared Flow (Firebase or URL fragment) ---
 
   async function loadSharedMarkdown() {
     const hash = window.location.hash.substring(1); // Remove leading #
     if (!hash) return;
 
-    // Parse fragment: #d=<data>&k=<key>
+    // Parse fragment parameters
     const params = new URLSearchParams(hash);
-    const dataString = params.get('d');
+    const docId = params.get('id');     // Firebase doc ID (short URL)
+    const inlineData = params.get('d'); // Inline data (URL fallback)
     const keyString = params.get('k');
 
-    if (!dataString || !keyString) return;
+    if (!keyString || (!docId && !inlineData)) return;
 
     try {
       // Show loading state
       markdownPreview.innerHTML = '<div style="padding: 40px; text-align: center; opacity: 0.6;"><i class="bi bi-lock"></i> Decrypting shared content...</div>';
       setViewMode('preview');
+
+      let dataString;
+
+      if (docId) {
+        // Firebase mode: fetch encrypted data by doc ID
+        const doc = await db.collection('shares').doc(docId).get();
+        if (!doc.exists) throw new Error('Shared document not found.');
+        dataString = doc.data().d;
+      } else {
+        // URL fallback mode: data is inline
+        dataString = inlineData;
+      }
 
       // Step 1: Decode data from base64url
       const encrypted = base64UrlToUint8Array(dataString);
@@ -2876,7 +2912,7 @@ This is a fully client-side application. Your content never leaves your browser 
         <h3 style="color: var(--color-danger-fg);">
           <i class="bi bi-shield-exclamation"></i> Decryption Failed
         </h3>
-        <p style="opacity: 0.7;">The link may be invalid or the key is incorrect.</p>
+        <p style="opacity: 0.7;">The link may be invalid or the document may not exist.</p>
         <p style="font-size: 13px; opacity: 0.5;">${error.message}</p>
       </div>`;
       setViewMode('preview');
