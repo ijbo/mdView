@@ -310,6 +310,21 @@ This is a fully client-side application. Your content never leaves your browser 
 
       processEmojis(markdownPreview);
 
+      // Feature 15: Add anchor links to headings
+      addHeadingAnchors(markdownPreview);
+
+      // Feature 14: Process callouts/admonitions
+      processCallouts(markdownPreview);
+
+      // Feature 13: Process footnotes
+      processFootnotes(markdownPreview, markdown);
+
+      // Feature 4: Rebuild TOC
+      const _tocPanel = document.getElementById('toc-panel');
+      if (_tocPanel && _tocPanel.style.display !== 'none' && typeof buildTOC === 'function') {
+        buildTOC();
+      }
+
       try {
         const mermaidNodes = markdownPreview.querySelectorAll('.mermaid');
         if (mermaidNodes.length > 0) {
@@ -1910,6 +1925,769 @@ This is a fully client-side application. Your content never leaves your browser 
       container.appendChild(toolbar);
     });
   }
+
+  // ========================================
+  // FEATURE 15: HEADING ANCHOR LINKS
+  // ========================================
+
+  function addHeadingAnchors(container) {
+    const headings = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    headings.forEach(heading => {
+      if (heading.querySelector('.heading-anchor')) return;
+      let id = heading.id;
+      if (!id) {
+        id = heading.textContent.trim().toLowerCase()
+          .replace(/[^\w\s-]/g, '').replace(/\s+/g, '-');
+        heading.id = id;
+      }
+      const anchor = document.createElement('a');
+      anchor.className = 'heading-anchor';
+      anchor.href = '#' + id;
+      anchor.textContent = '🔗';
+      anchor.setAttribute('aria-label', 'Link to ' + heading.textContent);
+      heading.prepend(anchor);
+    });
+  }
+
+  // ========================================
+  // FEATURE 14: CALLOUTS / ADMONITIONS
+  // ========================================
+
+  const CALLOUT_CONFIG = {
+    NOTE: { icon: 'bi-info-circle-fill', cls: 'note' },
+    TIP: { icon: 'bi-lightbulb-fill', cls: 'tip' },
+    IMPORTANT: { icon: 'bi-exclamation-diamond-fill', cls: 'important' },
+    WARNING: { icon: 'bi-exclamation-triangle-fill', cls: 'warning' },
+    CAUTION: { icon: 'bi-x-octagon-fill', cls: 'caution' }
+  };
+
+  function processCallouts(container) {
+    const blockquotes = container.querySelectorAll('blockquote');
+    blockquotes.forEach(bq => {
+      const firstP = bq.querySelector('p');
+      if (!firstP) return;
+      const text = firstP.innerHTML;
+      const match = text.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i);
+      if (!match) return;
+
+      const type = match[1].toUpperCase();
+      const config = CALLOUT_CONFIG[type];
+      if (!config) return;
+
+      // Remove the [!TYPE] prefix from the first paragraph
+      firstP.innerHTML = text.replace(match[0], '');
+
+      // Build callout div
+      const callout = document.createElement('div');
+      callout.className = `markdown-callout callout-${config.cls}`;
+
+      const title = document.createElement('div');
+      title.className = 'callout-title';
+      title.innerHTML = `<i class="bi ${config.icon}"></i> ${type.charAt(0) + type.slice(1).toLowerCase()}`;
+      callout.appendChild(title);
+
+      // Move blockquote children into callout
+      while (bq.firstChild) {
+        callout.appendChild(bq.firstChild);
+      }
+      bq.replaceWith(callout);
+    });
+  }
+
+  // ========================================
+  // FEATURE 13: FOOTNOTES
+  // ========================================
+
+  function processFootnotes(container, rawMarkdown) {
+    // Find footnote definitions: [^id]: content
+    const defRegex = /^\[\^(\w+)\]:\s*(.+)$/gm;
+    const definitions = {};
+    let defMatch;
+    while ((defMatch = defRegex.exec(rawMarkdown)) !== null) {
+      definitions[defMatch[1]] = defMatch[2];
+    }
+
+    if (Object.keys(definitions).length === 0) return;
+
+    // Find and replace footnote references [^id] in the rendered HTML
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+    const textNodes = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeValue.includes('[^')) {
+        let parent = node.parentNode;
+        let isInCode = false;
+        while (parent && parent !== container) {
+          if (parent.tagName === 'PRE' || parent.tagName === 'CODE') { isInCode = true; break; }
+          parent = parent.parentNode;
+        }
+        if (!isInCode) textNodes.push(node);
+      }
+    }
+
+    let footnoteIndex = 0;
+    const usedFootnotes = [];
+
+    textNodes.forEach(textNode => {
+      const text = textNode.nodeValue;
+      const refRegex = /\[\^(\w+)\]/g;
+      let match;
+      let lastIndex = 0;
+      const fragment = document.createDocumentFragment();
+      let hasRefs = false;
+
+      while ((match = refRegex.exec(text)) !== null) {
+        const id = match[1];
+        if (!definitions[id]) continue;
+        hasRefs = true;
+        footnoteIndex++;
+        usedFootnotes.push({ id, index: footnoteIndex, content: definitions[id] });
+
+        // Text before the reference
+        if (match.index > lastIndex) {
+          fragment.appendChild(document.createTextNode(text.substring(lastIndex, match.index)));
+        }
+
+        // Create superscript link
+        const sup = document.createElement('a');
+        sup.className = 'footnote-ref';
+        sup.href = '#fn-' + id;
+        sup.id = 'fnref-' + id;
+        sup.textContent = '[' + footnoteIndex + ']';
+        sup.title = definitions[id];
+        fragment.appendChild(sup);
+
+        lastIndex = refRegex.lastIndex;
+      }
+
+      if (hasRefs) {
+        if (lastIndex < text.length) {
+          fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
+        }
+        textNode.parentNode.replaceChild(fragment, textNode);
+      }
+    });
+
+    // Remove footnote definition paragraphs from the rendered output
+    container.querySelectorAll('p').forEach(p => {
+      if (/^\[\^\w+\]:\s*.+/.test(p.textContent.trim())) {
+        p.remove();
+      }
+    });
+
+    // Append footnotes section
+    if (usedFootnotes.length > 0) {
+      const section = document.createElement('section');
+      section.className = 'footnotes-section';
+      section.innerHTML = '<div class="footnote-title">Footnotes</div>';
+      usedFootnotes.forEach(fn => {
+        const item = document.createElement('div');
+        item.className = 'footnote-item';
+        item.id = 'fn-' + fn.id;
+        item.innerHTML = `<span class="footnote-number">${fn.index}.</span>
+          <span>${fn.content} <a class="footnote-backref" href="#fnref-${fn.id}" title="Back to reference">↩</a></span>`;
+        section.appendChild(item);
+      });
+      container.appendChild(section);
+    }
+  }
+
+  // ========================================
+  // FEATURE 5: AUTO-SAVE TO LOCALSTORAGE
+  // ========================================
+
+  const AUTOSAVE_KEY = 'md-viewer-autosave';
+  const AUTOSAVE_TIME_KEY = 'md-viewer-autosave-time';
+  const AUTOSAVE_DELAY = 1000;
+  let autosaveTimeout = null;
+  const autosaveIndicator = document.getElementById('autosave-indicator');
+  const autosaveText = document.getElementById('autosave-text');
+
+  function saveToLocalStorage() {
+    try {
+      localStorage.setItem(AUTOSAVE_KEY, markdownEditor.value);
+      localStorage.setItem(AUTOSAVE_TIME_KEY, Date.now().toString());
+      showAutosaveIndicator();
+    } catch (e) {
+      console.warn('Auto-save failed:', e);
+    }
+  }
+
+  function showAutosaveIndicator() {
+    if (autosaveIndicator) {
+      autosaveIndicator.style.display = 'flex';
+      autosaveText.textContent = 'Saved';
+    }
+  }
+
+  function restoreFromLocalStorage() {
+    // Don't restore if loading a shared document
+    const hash = window.location.hash;
+    if (hash && hash.includes('d=') && hash.includes('k=')) return false;
+
+    const saved = localStorage.getItem(AUTOSAVE_KEY);
+    if (saved && saved.trim()) {
+      markdownEditor.value = saved;
+      const savedTime = localStorage.getItem(AUTOSAVE_TIME_KEY);
+      if (savedTime) {
+        const elapsed = Date.now() - parseInt(savedTime);
+        const seconds = Math.floor(elapsed / 1000);
+        if (seconds < 60) autosaveText.textContent = `Saved ${seconds}s ago`;
+        else if (seconds < 3600) autosaveText.textContent = `Saved ${Math.floor(seconds / 60)}m ago`;
+        else autosaveText.textContent = `Saved ${Math.floor(seconds / 3600)}h ago`;
+        autosaveIndicator.style.display = 'flex';
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function debouncedAutosave() {
+    clearTimeout(autosaveTimeout);
+    autosaveTimeout = setTimeout(saveToLocalStorage, AUTOSAVE_DELAY);
+  }
+
+  // Hook autosave into editor input
+  markdownEditor.addEventListener('input', debouncedAutosave);
+
+  // ========================================
+  // FEATURE 12: IMAGE PASTE FROM CLIPBOARD
+  // ========================================
+
+  markdownEditor.addEventListener('paste', function (e) {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image/') === 0) {
+        e.preventDefault();
+        const blob = items[i].getAsFile();
+        const reader = new FileReader();
+        reader.onload = function (event) {
+          const base64 = event.target.result;
+          const markdown = `![pasted image](${base64})`;
+          insertAtCursor(markdown);
+        };
+        reader.readAsDataURL(blob);
+        return;
+      }
+    }
+  });
+
+  // ========================================
+  // FEATURE 3: FORMATTING TOOLBAR HELPERS
+  // ========================================
+
+  function wrapSelection(before, after, placeholder) {
+    const start = markdownEditor.selectionStart;
+    const end = markdownEditor.selectionEnd;
+    const text = markdownEditor.value;
+    const selected = text.substring(start, end) || placeholder || '';
+
+    const newText = text.substring(0, start) + before + selected + after + text.substring(end);
+    markdownEditor.value = newText;
+
+    // Position cursor: select the placeholder or place after
+    if (start === end && placeholder) {
+      markdownEditor.selectionStart = start + before.length;
+      markdownEditor.selectionEnd = start + before.length + placeholder.length;
+    } else {
+      markdownEditor.selectionStart = start + before.length;
+      markdownEditor.selectionEnd = start + before.length + selected.length;
+    }
+
+    markdownEditor.focus();
+    markdownEditor.dispatchEvent(new Event('input'));
+  }
+
+  function insertAtCursor(text) {
+    const start = markdownEditor.selectionStart;
+    const end = markdownEditor.selectionEnd;
+    const value = markdownEditor.value;
+
+    markdownEditor.value = value.substring(0, start) + text + value.substring(end);
+    markdownEditor.selectionStart = markdownEditor.selectionEnd = start + text.length;
+    markdownEditor.focus();
+    markdownEditor.dispatchEvent(new Event('input'));
+  }
+
+  function insertLinePrefix(prefix, placeholder) {
+    const start = markdownEditor.selectionStart;
+    const end = markdownEditor.selectionEnd;
+    const text = markdownEditor.value;
+
+    // Find the beginning of the current line
+    const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+    const lineEnd = text.indexOf('\n', end);
+    const actualEnd = lineEnd === -1 ? text.length : lineEnd;
+    const selectedLines = text.substring(lineStart, actualEnd);
+
+    // Add prefix to each line
+    const prefixed = selectedLines.split('\n').map(line => prefix + line).join('\n');
+    markdownEditor.value = text.substring(0, lineStart) + prefixed + text.substring(actualEnd);
+
+    markdownEditor.selectionStart = lineStart;
+    markdownEditor.selectionEnd = lineStart + prefixed.length;
+    markdownEditor.focus();
+    markdownEditor.dispatchEvent(new Event('input'));
+  }
+
+  // Formatting toolbar action handler
+  const FORMATTING_ACTIONS = {
+    bold: () => wrapSelection('**', '**', 'bold text'),
+    italic: () => wrapSelection('*', '*', 'italic text'),
+    strikethrough: () => wrapSelection('~~', '~~', 'strikethrough'),
+    heading: () => insertLinePrefix('## ', ''),
+    link: () => wrapSelection('[', '](url)', 'link text'),
+    image: () => insertAtCursor('![alt text](image-url)'),
+    code: () => wrapSelection('`', '`', 'code'),
+    codeblock: () => wrapSelection('\n```\n', '\n```\n', 'code block'),
+    ul: () => insertLinePrefix('- ', ''),
+    ol: () => insertLinePrefix('1. ', ''),
+    tasklist: () => insertLinePrefix('- [ ] ', ''),
+    quote: () => insertLinePrefix('> ', ''),
+    hr: () => insertAtCursor('\n---\n'),
+    table: () => insertAtCursor('\n| Header 1 | Header 2 | Header 3 |\n|----------|----------|----------|\n| Cell 1   | Cell 2   | Cell 3   |\n| Cell 4   | Cell 5   | Cell 6   |\n'),
+    undo: () => { markdownEditor.focus(); document.execCommand('undo'); },
+    redo: () => { markdownEditor.focus(); document.execCommand('redo'); }
+  };
+
+  // Wire up formatting toolbar buttons
+  document.querySelectorAll('.fmt-btn[data-action]').forEach(btn => {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      const action = this.getAttribute('data-action');
+      if (FORMATTING_ACTIONS[action]) {
+        FORMATTING_ACTIONS[action]();
+      }
+    });
+  });
+
+  // ========================================
+  // FEATURE 3: KEYBOARD SHORTCUTS
+  // ========================================
+
+  markdownEditor.addEventListener('keydown', function (e) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+
+    if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault();
+      FORMATTING_ACTIONS.bold();
+    } else if (e.key === 'i' || e.key === 'I') {
+      e.preventDefault();
+      FORMATTING_ACTIONS.italic();
+    } else if (e.key === 'k' || e.key === 'K') {
+      e.preventDefault();
+      if (e.shiftKey) {
+        FORMATTING_ACTIONS.image();
+      } else {
+        FORMATTING_ACTIONS.link();
+      }
+    }
+  });
+
+  // ========================================
+  // FEATURE 1: FIND & REPLACE
+  // ========================================
+
+  const findReplaceBar = document.getElementById('find-replace-bar');
+  const findInput = document.getElementById('find-input');
+  const replaceInput = document.getElementById('replace-input');
+  const findRegexToggle = document.getElementById('find-regex-toggle');
+  const findMatchCount = document.getElementById('find-match-count');
+  const findPrevBtn = document.getElementById('find-prev');
+  const findNextBtn = document.getElementById('find-next');
+  const replaceOneBtn = document.getElementById('replace-one');
+  const replaceAllBtn = document.getElementById('replace-all');
+  const findCloseBtn = document.getElementById('find-close');
+
+  let findMatches = [];
+  let findCurrentIndex = -1;
+  let findRegexMode = false;
+
+  function openFindBar() {
+    findReplaceBar.style.display = 'block';
+    findInput.focus();
+    const selected = markdownEditor.value.substring(markdownEditor.selectionStart, markdownEditor.selectionEnd);
+    if (selected) findInput.value = selected;
+    performFind();
+  }
+
+  function closeFindBar() {
+    findReplaceBar.style.display = 'none';
+    findMatches = [];
+    findCurrentIndex = -1;
+    findMatchCount.textContent = '0 results';
+    markdownEditor.focus();
+  }
+
+  function performFind() {
+    const query = findInput.value;
+    if (!query) {
+      findMatches = [];
+      findCurrentIndex = -1;
+      findMatchCount.textContent = '0 results';
+      return;
+    }
+
+    const text = markdownEditor.value;
+    findMatches = [];
+
+    try {
+      if (findRegexMode) {
+        const regex = new RegExp(query, 'gi');
+        let m;
+        while ((m = regex.exec(text)) !== null) {
+          findMatches.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
+          if (findMatches.length > 10000) break;
+        }
+      } else {
+        const lowerQuery = query.toLowerCase();
+        const lowerText = text.toLowerCase();
+        let pos = 0;
+        while ((pos = lowerText.indexOf(lowerQuery, pos)) !== -1) {
+          findMatches.push({ start: pos, end: pos + query.length, text: text.substring(pos, pos + query.length) });
+          pos += query.length;
+          if (findMatches.length > 10000) break;
+        }
+      }
+    } catch (e) {
+      findMatchCount.textContent = 'Invalid regex';
+      return;
+    }
+
+    findMatchCount.textContent = findMatches.length + ' result' + (findMatches.length !== 1 ? 's' : '');
+
+    if (findMatches.length > 0) {
+      // Find closest match to cursor
+      const cursor = markdownEditor.selectionStart;
+      findCurrentIndex = 0;
+      for (let i = 0; i < findMatches.length; i++) {
+        if (findMatches[i].start >= cursor) { findCurrentIndex = i; break; }
+      }
+      selectMatch(findCurrentIndex);
+    } else {
+      findCurrentIndex = -1;
+    }
+  }
+
+  function selectMatch(index) {
+    if (index < 0 || index >= findMatches.length) return;
+    findCurrentIndex = index;
+    const match = findMatches[index];
+    markdownEditor.focus();
+    markdownEditor.setSelectionRange(match.start, match.end);
+
+    // Scroll to selection
+    const lineHeight = parseInt(getComputedStyle(markdownEditor).lineHeight) || 20;
+    const linesBefore = markdownEditor.value.substring(0, match.start).split('\n').length;
+    markdownEditor.scrollTop = Math.max(0, (linesBefore - 3) * lineHeight);
+
+    findMatchCount.textContent = `${index + 1} / ${findMatches.length}`;
+  }
+
+  function findNext() {
+    if (findMatches.length === 0) return;
+    selectMatch((findCurrentIndex + 1) % findMatches.length);
+  }
+
+  function findPrev() {
+    if (findMatches.length === 0) return;
+    selectMatch((findCurrentIndex - 1 + findMatches.length) % findMatches.length);
+  }
+
+  function replaceOne() {
+    if (findCurrentIndex < 0 || findCurrentIndex >= findMatches.length) return;
+    const match = findMatches[findCurrentIndex];
+    const text = markdownEditor.value;
+    markdownEditor.value = text.substring(0, match.start) + replaceInput.value + text.substring(match.end);
+    markdownEditor.dispatchEvent(new Event('input'));
+    performFind();
+  }
+
+  function replaceAll() {
+    const query = findInput.value;
+    const replacement = replaceInput.value;
+    if (!query) return;
+
+    let text = markdownEditor.value;
+    try {
+      if (findRegexMode) {
+        text = text.replace(new RegExp(query, 'gi'), replacement);
+      } else {
+        text = text.split(query).join(replacement);
+      }
+    } catch (e) { return; }
+
+    markdownEditor.value = text;
+    markdownEditor.dispatchEvent(new Event('input'));
+    performFind();
+  }
+
+  // Wire up find & replace events
+  findInput.addEventListener('input', performFind);
+  findNextBtn.addEventListener('click', findNext);
+  findPrevBtn.addEventListener('click', findPrev);
+  replaceOneBtn.addEventListener('click', replaceOne);
+  replaceAllBtn.addEventListener('click', replaceAll);
+  findCloseBtn.addEventListener('click', closeFindBar);
+
+  findRegexToggle.addEventListener('click', function () {
+    findRegexMode = !findRegexMode;
+    this.classList.toggle('active', findRegexMode);
+    performFind();
+  });
+
+  findInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) findPrev(); else findNext();
+    }
+    if (e.key === 'Escape') closeFindBar();
+  });
+
+  replaceInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeFindBar();
+  });
+
+  // ========================================
+  // FEATURE 4: TABLE OF CONTENTS
+  // ========================================
+
+  const tocPanelEl = document.getElementById('toc-panel');
+  const tocNavEl = document.getElementById('toc-nav');
+  const tocToggleBtn = document.getElementById('toc-toggle');
+  const tocCloseBtn = document.getElementById('toc-close');
+  let tocObserver = null;
+
+  function buildTOC() {
+    if (!tocNavEl) return;
+    tocNavEl.innerHTML = '';
+    const headings = markdownPreview.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    if (headings.length === 0) {
+      tocNavEl.innerHTML = '<div style="padding:12px;font-size:13px;opacity:0.6">No headings found</div>';
+      return;
+    }
+
+    headings.forEach((heading, i) => {
+      const level = parseInt(heading.tagName.charAt(1));
+      if (!heading.id) {
+        heading.id = 'heading-' + i;
+      }
+
+      const item = document.createElement('a');
+      item.className = 'toc-item';
+      item.setAttribute('data-level', level);
+      item.textContent = heading.textContent.replace('🔗', '').trim();
+      item.href = '#' + heading.id;
+      item.addEventListener('click', function (e) {
+        e.preventDefault();
+        heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      tocNavEl.appendChild(item);
+    });
+
+    // Set up IntersectionObserver for active heading tracking
+    if (tocObserver) tocObserver.disconnect();
+    tocObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const id = entry.target.id;
+          tocNavEl.querySelectorAll('.toc-item').forEach(item => {
+            item.classList.toggle('active', item.getAttribute('href') === '#' + id);
+          });
+        }
+      });
+    }, { root: previewPane, rootMargin: '0px 0px -80% 0px', threshold: 0 });
+
+    headings.forEach(h => tocObserver.observe(h));
+  }
+
+  function toggleTOC() {
+    const isVisible = tocPanelEl.style.display !== 'none';
+    tocPanelEl.style.display = isVisible ? 'none' : 'block';
+    if (!isVisible) buildTOC();
+  }
+
+  if (tocToggleBtn) tocToggleBtn.addEventListener('click', toggleTOC);
+  if (tocCloseBtn) tocCloseBtn.addEventListener('click', () => { tocPanelEl.style.display = 'none'; });
+
+  // ========================================
+  // FEATURE 9: ZEN MODE
+  // ========================================
+
+  const zenModeBtn = document.getElementById('zen-mode-button');
+  const zenExitHint = document.getElementById('zen-exit-hint');
+  let isZenMode = false;
+
+  function toggleZenMode() {
+    isZenMode = !isZenMode;
+    document.body.classList.toggle('zen-mode', isZenMode);
+
+    if (isZenMode) {
+      zenExitHint.style.display = 'block';
+      setTimeout(() => { zenExitHint.style.display = 'none'; }, 4000);
+      try { document.documentElement.requestFullscreen(); } catch (e) { /* ignore */ }
+    } else {
+      zenExitHint.style.display = 'none';
+      try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* ignore */ }
+    }
+  }
+
+  if (zenModeBtn) zenModeBtn.addEventListener('click', toggleZenMode);
+
+  document.addEventListener('fullscreenchange', function () {
+    if (!document.fullscreenElement && isZenMode) {
+      isZenMode = false;
+      document.body.classList.remove('zen-mode');
+      zenExitHint.style.display = 'none';
+    }
+  });
+
+  // ========================================
+  // FEATURE 11: SLIDE / PRESENTATION MODE
+  // ========================================
+
+  const slideContainer = document.getElementById('slide-container');
+  const slideBody = document.getElementById('slide-body');
+  const slideCounter = document.getElementById('slide-counter');
+  const slidePrevBtn = document.getElementById('slide-prev');
+  const slideNextBtn = document.getElementById('slide-next');
+  const slideExitBtn = document.getElementById('slide-exit');
+  const presentBtn = document.getElementById('present-button');
+  let slides = [];
+  let currentSlide = 0;
+
+  function parseSlides(markdown) {
+    // Split on horizontal rules (--- or *** or ___ on their own line)
+    return markdown.split(/\n(?:---|\*\*\*|___)\n/).map(s => s.trim()).filter(s => s.length > 0);
+  }
+
+  function renderSlide(index) {
+    if (index < 0 || index >= slides.length) return;
+    currentSlide = index;
+    const html = marked.parse(slides[index]);
+    const sanitized = DOMPurify.sanitize(html, {
+      ADD_TAGS: ['mjx-container'],
+      ADD_ATTR: ['id', 'class']
+    });
+    slideBody.innerHTML = sanitized;
+    processEmojis(slideBody);
+    addHeadingAnchors(slideBody);
+    processCallouts(slideBody);
+
+    // Render mermaid if present
+    const mermaidNodes = slideBody.querySelectorAll('.mermaid');
+    if (mermaidNodes.length > 0) {
+      try { mermaid.run({ nodes: mermaidNodes, suppressErrors: true }); } catch (e) { }
+    }
+
+    // Render MathJax if present
+    if (window.MathJax) {
+      try { MathJax.typesetPromise([slideBody]); } catch (e) { }
+    }
+
+    slideCounter.textContent = (index + 1) + ' / ' + slides.length;
+    slidePrevBtn.disabled = index === 0;
+    slideNextBtn.disabled = index === slides.length - 1;
+  }
+
+  function startPresentation() {
+    const md = markdownEditor.value;
+    slides = parseSlides(md);
+    if (slides.length === 0) {
+      alert('No slides found. Use --- (horizontal rule) to separate slides.');
+      return;
+    }
+    currentSlide = 0;
+    slideContainer.style.display = 'flex';
+    renderSlide(0);
+    try { document.documentElement.requestFullscreen(); } catch (e) { /* ignore */ }
+  }
+
+  function exitPresentation() {
+    slideContainer.style.display = 'none';
+    slides = [];
+    currentSlide = 0;
+    try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* ignore */ }
+  }
+
+  if (presentBtn) presentBtn.addEventListener('click', startPresentation);
+  if (slideExitBtn) slideExitBtn.addEventListener('click', exitPresentation);
+  if (slidePrevBtn) slidePrevBtn.addEventListener('click', () => renderSlide(currentSlide - 1));
+  if (slideNextBtn) slideNextBtn.addEventListener('click', () => renderSlide(currentSlide + 1));
+
+  // Keyboard nav for slides
+  document.addEventListener('keydown', function (e) {
+    if (slideContainer.style.display === 'none') return;
+    if (e.key === 'ArrowRight' || e.key === ' ') {
+      e.preventDefault();
+      renderSlide(currentSlide + 1);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      renderSlide(currentSlide - 1);
+    } else if (e.key === 'Escape') {
+      exitPresentation();
+    }
+  });
+
+  // ========================================
+  // FEATURE 16: CUSTOM PREVIEW THEMES
+  // ========================================
+
+  const savedPreviewTheme = localStorage.getItem('md-viewer-preview-theme') || 'github';
+  document.documentElement.setAttribute('data-preview-theme', savedPreviewTheme);
+
+  // Mark the active theme in the dropdown
+  function updateThemeDropdown(themeName) {
+    document.querySelectorAll('.theme-option').forEach(opt => {
+      opt.classList.toggle('active-theme', opt.getAttribute('data-theme-name') === themeName);
+    });
+  }
+  updateThemeDropdown(savedPreviewTheme);
+
+  document.querySelectorAll('.theme-option').forEach(opt => {
+    opt.addEventListener('click', function () {
+      const themeName = this.getAttribute('data-theme-name');
+      document.documentElement.setAttribute('data-preview-theme', themeName);
+      localStorage.setItem('md-viewer-preview-theme', themeName);
+      updateThemeDropdown(themeName);
+      renderMarkdown(); // Re-render to apply theme-specific styles
+    });
+  });
+
+  // ========================================
+  // FEATURE 5: RESTORE AUTO-SAVED CONTENT
+  // ========================================
+
+  // Restore auto-saved content (overrides sample if available)
+  const wasRestored = restoreFromLocalStorage();
+  if (wasRestored) {
+    renderMarkdown();
+  }
+
+  // ========================================
+  // FIND & REPLACE KEYBOARD SHORTCUT
+  // ========================================
+
+  // Override Ctrl+F to open custom find bar when editor is focused
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+      // Only intercept if editor has focus or find bar is already open
+      if (document.activeElement === markdownEditor || findReplaceBar.style.display === 'block') {
+        e.preventDefault();
+        openFindBar();
+      }
+    }
+    // Escape to close find bar
+    if (e.key === 'Escape' && findReplaceBar.style.display === 'block') {
+      closeFindBar();
+    }
+    // Escape to exit zen mode
+    if (e.key === 'Escape' && isZenMode) {
+      toggleZenMode();
+    }
+  });
 
   // ========================================
   // ENCRYPTED SHARING VIA URL

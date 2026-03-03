@@ -82,8 +82,11 @@
                         <div class="stat-item me-3">
                             <i class="bi bi-text-paragraph me-1"></i> <span id="word-count">0</span> Words
                         </div>
-                        <div class="stat-item">
+                        <div class="stat-item me-3">
                             <i class="bi bi-fonts me-1"></i> <span id="char-count">0</span> Chars
+                        </div>
+                        <div class="stat-item autosave-indicator" id="autosave-indicator" style="display:none">
+                            <span class="autosave-dot"></span> <span id="autosave-text">Saved</span>
                         </div>
                     </div>
                 </div>
@@ -109,6 +112,9 @@
                     <button id="toggle-sync" class="tool-button sync-enabled" title="Toggle Sync Scrolling">
                         <i class="bi bi-link"></i> Sync On
                     </button>
+                    <button id="toc-toggle" class="tool-button" title="Table of Contents">
+                        <i class="bi bi-list-nested"></i> TOC
+                    </button>
                     <button id="import-button" class="tool-button" title="Import Markdown">
                         <i class="bi bi-upload"></i> Import
                     </button>
@@ -133,6 +139,33 @@
                     <button id="share-button" class="tool-button" title="Share Markdown">
                         <i class="bi bi-share"></i> Share
                     </button>
+
+                    <button id="present-button" class="tool-button" title="Presentation Mode">
+                        <i class="bi bi-easel"></i> Present
+                    </button>
+
+                    <button id="zen-mode-button" class="tool-button" title="Zen Mode (Distraction-free)">
+                        <i class="bi bi-fullscreen"></i>
+                    </button>
+
+                    <div class="dropdown">
+                        <button class="tool-button dropdown-toggle" type="button" id="themePickerDropdown"
+                            data-bs-toggle="dropdown" aria-expanded="false" title="Preview Theme">
+                            <i class="bi bi-palette"></i>
+                        </button>
+                        <ul class="dropdown-menu" aria-labelledby="themePickerDropdown">
+                            <li><button class="dropdown-item theme-option" data-theme-name="github"
+                                    type="button">GitHub</button></li>
+                            <li><button class="dropdown-item theme-option" data-theme-name="gitlab"
+                                    type="button">GitLab</button></li>
+                            <li><button class="dropdown-item theme-option" data-theme-name="notion"
+                                    type="button">Notion</button></li>
+                            <li><button class="dropdown-item theme-option" data-theme-name="dracula"
+                                    type="button">Dracula</button></li>
+                            <li><button class="dropdown-item theme-option" data-theme-name="solarized"
+                                    type="button">Solarized</button></li>
+                        </ul>
+                    </div>
 
                     <button id="theme-toggle" class="tool-button" title="Toggle Dark Mode">
                         <i class="bi bi-moon"></i>
@@ -232,7 +265,70 @@
             <p class="mb-0"><i class="bi bi-cloud-arrow-up me-2"></i>Drop your Markdown file here or click to browse</p>
         </div>
 
+        <!-- Formatting Toolbar -->
+        <div class="formatting-toolbar" id="formatting-toolbar">
+            <button class="fmt-btn" data-action="undo" title="Undo (Ctrl+Z)"><i
+                    class="bi bi-arrow-counterclockwise"></i></button>
+            <button class="fmt-btn" data-action="redo" title="Redo (Ctrl+Y)"><i
+                    class="bi bi-arrow-clockwise"></i></button>
+            <span class="fmt-separator"></span>
+            <button class="fmt-btn" data-action="bold" title="Bold (Ctrl+B)"><i class="bi bi-type-bold"></i></button>
+            <button class="fmt-btn" data-action="italic" title="Italic (Ctrl+I)"><i
+                    class="bi bi-type-italic"></i></button>
+            <button class="fmt-btn" data-action="strikethrough" title="Strikethrough"><i
+                    class="bi bi-type-strikethrough"></i></button>
+            <span class="fmt-separator"></span>
+            <button class="fmt-btn" data-action="heading" title="Heading"><i class="bi bi-type-h1"></i></button>
+            <button class="fmt-btn" data-action="link" title="Link (Ctrl+K)"><i class="bi bi-link-45deg"></i></button>
+            <button class="fmt-btn" data-action="image" title="Image"><i class="bi bi-image"></i></button>
+            <button class="fmt-btn" data-action="code" title="Inline Code"><i class="bi bi-code"></i></button>
+            <button class="fmt-btn" data-action="codeblock" title="Code Block"><i
+                    class="bi bi-code-square"></i></button>
+            <span class="fmt-separator"></span>
+            <button class="fmt-btn" data-action="ul" title="Bullet List"><i class="bi bi-list-ul"></i></button>
+            <button class="fmt-btn" data-action="ol" title="Numbered List"><i class="bi bi-list-ol"></i></button>
+            <button class="fmt-btn" data-action="tasklist" title="Task List"><i
+                    class="bi bi-check2-square"></i></button>
+            <button class="fmt-btn" data-action="quote" title="Blockquote"><i class="bi bi-quote"></i></button>
+            <span class="fmt-separator"></span>
+            <button class="fmt-btn" data-action="hr" title="Horizontal Rule"><i class="bi bi-dash-lg"></i></button>
+            <button class="fmt-btn" data-action="table" title="Insert Table"><i class="bi bi-table"></i></button>
+        </div>
+
+        <!-- Find & Replace Bar -->
+        <div class="find-replace-bar" id="find-replace-bar" style="display:none">
+            <div class="find-replace-row">
+                <div class="find-input-group">
+                    <input type="text" id="find-input" placeholder="Find..." autocomplete="off" />
+                    <button class="find-btn" id="find-regex-toggle" title="Toggle Regex">.*</button>
+                    <span class="find-match-count" id="find-match-count">0 results</span>
+                </div>
+                <div class="find-nav-buttons">
+                    <button class="find-btn" id="find-prev" title="Previous (Shift+Enter)"><i
+                            class="bi bi-chevron-up"></i></button>
+                    <button class="find-btn" id="find-next" title="Next (Enter)"><i
+                            class="bi bi-chevron-down"></i></button>
+                </div>
+                <div class="replace-input-group">
+                    <input type="text" id="replace-input" placeholder="Replace..." autocomplete="off" />
+                    <button class="find-btn" id="replace-one" title="Replace">Replace</button>
+                    <button class="find-btn" id="replace-all" title="Replace All">All</button>
+                </div>
+                <button class="find-btn find-close-btn" id="find-close" title="Close (Escape)"><i
+                        class="bi bi-x-lg"></i></button>
+            </div>
+        </div>
+
         <div class="content-container">
+            <!-- TOC Side Panel -->
+            <aside class="toc-panel" id="toc-panel" style="display:none">
+                <div class="toc-header">
+                    <span>Table of Contents</span>
+                    <button class="toc-close-btn" id="toc-close" title="Close TOC"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <nav class="toc-nav" id="toc-nav"></nav>
+            </aside>
+
             <div class="editor-pane">
                 <textarea id="markdown-editor" placeholder="Type or paste your Markdown here..."
                     aria-label="Markdown editor"></textarea>
@@ -246,6 +342,27 @@
                 <div id="markdown-preview" class="markdown-body"></div>
             </div>
         </div>
+    </div>
+
+    <!-- Slide / Presentation Container -->
+    <div id="slide-container" style="display:none">
+        <div class="slide-header">
+            <span class="slide-counter" id="slide-counter">1 / 1</span>
+            <button class="slide-exit-btn" id="slide-exit" title="Exit Presentation (Escape)"><i
+                    class="bi bi-x-lg me-1"></i> Exit</button>
+        </div>
+        <div class="slide-content">
+            <div id="slide-body" class="markdown-body"></div>
+        </div>
+        <div class="slide-nav">
+            <button class="slide-nav-btn" id="slide-prev"><i class="bi bi-chevron-left"></i> Prev</button>
+            <button class="slide-nav-btn" id="slide-next">Next <i class="bi bi-chevron-right"></i></button>
+        </div>
+    </div>
+
+    <!-- Zen Mode Exit Hint -->
+    <div id="zen-exit-hint" class="zen-exit-hint" style="display:none">
+        Press <kbd>Escape</kbd> to exit Zen mode
     </div>
 
     <!-- Mermaid Zoom Modal -->
